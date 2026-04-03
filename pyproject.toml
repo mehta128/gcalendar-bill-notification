@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "gcalendar-bill-agent"
+version = "0.1.0"
+description = "Agentic bill checker via Google Calendar MCP"
+authors = ["Kaitav Mehta"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.13"
+openai = "^1.70.0"
+mcp = "^1.5.0"
+google-auth = "^2.38.0"
+google-auth-oauthlib = "^1.2.0"
+google-api-python-client = "^2.164.0"
+python-dotenv = "^1.0.0"
+loguru = "^0.7.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.9.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry-core.masonry.api"
