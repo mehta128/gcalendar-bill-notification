@@ -1,0 +1,18 @@
+services:
+  bill-agent:
+    build: .
+    env_file: .env
+    environment:
+      # Reach Ollama on the host machine from inside Docker
+      OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      # Override relative paths from .env to match Docker volume mount points
+      GOOGLE_CREDENTIALS_FILE: /credentials/credentials.json
+      GOOGLE_TOKEN_FILE: /credentials/token.json
+      LOG_FILE: /logs/bills.log
+    volumes:
+      - ./credentials:/credentials   # Google OAuth credentials + token
+      - ./logs:/logs                  # Persisted bill logs
+      - ./config.md:/app/config.md   # Live config — edit schedule/keywords without rebuild
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux compat (no-op on Mac)
+    restart: unless-stopped           # Keep running; scheduler triggers agent at configured time

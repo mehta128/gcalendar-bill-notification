@@ -1,0 +1,10 @@
+.env
+credentials/credentials.json
+credentials/token.json
+credentials/*
+logs/
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
