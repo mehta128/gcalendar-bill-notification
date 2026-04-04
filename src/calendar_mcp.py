@@ -7,6 +7,7 @@ from pathlib import Path
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from mcp.server import Server
@@ -23,17 +24,37 @@ TOKEN_FILE = Path(os.getenv("GOOGLE_TOKEN_FILE", "/credentials/token.json"))
 app = Server("google-calendar-tasks")
 
 
+class AuthRequiredError(Exception):
+    pass
+
+
 def get_credentials():
-    creds = None
-    if TOKEN_FILE.exists():
+    if not TOKEN_FILE.exists():
+        raise AuthRequiredError(
+            "No token.json found. Run `python src/auth.py` locally to authenticate."
+        )
+
+    try:
         creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    except Exception:
+        raise AuthRequiredError("token.json is corrupt. Re-run `python src/auth.py`.")
+
+    if creds.expired and creds.refresh_token:
+        try:
             creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_FILE.write_text(creds.to_json())
+            TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+            TOKEN_FILE.write_text(creds.to_json())
+            return creds
+        except RefreshError:
+            TOKEN_FILE.unlink(missing_ok=True)
+            raise AuthRequiredError(
+                "Refresh token expired/revoked (invalid_grant). "
+                "Re-run `python src/auth.py` locally, then restart Docker."
+            )
+
+    if not creds.valid:
+        raise AuthRequiredError("Token is invalid. Re-run `python src/auth.py`.")
+
     return creds
 
 
@@ -68,7 +89,15 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
     if name == "get_todays_events":
-        service = get_calendar_service()
+        try:
+            service = get_calendar_service()
+        except AuthRequiredError as e:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "auth_required",
+                "message": str(e),
+            }))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
         calendars = service.calendarList().list().execute().get("items", [])
         events = []
         for cal in calendars:
@@ -103,6 +132,11 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         try:
             service = get_tasks_service()
             tasklists = service.tasklists().list().execute().get("items", [])
+        except AuthRequiredError as e:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "auth_required",
+                "message": str(e),
+            }))]
         except Exception as e:
             return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
 

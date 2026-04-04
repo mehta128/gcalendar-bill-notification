@@ -169,6 +169,10 @@ async def run_agent():
                         # Filter raw tool results to keyword-matching items only
                         try:
                             raw_items = json.loads(raw_content)
+                            if isinstance(raw_items, dict) and raw_items.get("error") == "auth_required":
+                                logger.error(f"Auth required: {raw_items.get('message')}")
+                                _send_auth_alert_email(email_config, raw_items.get("message", ""))
+                                return
                             if isinstance(raw_items, list):
                                 filtered = filter_items(raw_items, keywords)
                                 content = json.dumps(filtered, indent=2)
@@ -286,6 +290,37 @@ def _send_email(due_today: list, overdue: list, today: str, email_config: dict):
         logger.info(f"Email sent to {to_addr}: {subject}")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
+
+
+def _send_auth_alert_email(email_config: dict, message: str):
+    app_password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    if not app_password:
+        logger.warning("GMAIL_APP_PASSWORD not set — cannot send auth alert email.")
+        return
+    to_addr = email_config.get("to", "")
+    from_addr = email_config.get("from", "")
+    smtp_host = email_config.get("smtp_host", "smtp.gmail.com")
+    smtp_port = int(email_config.get("smtp_port", "587"))
+    body = (
+        "Your Google Calendar bill agent needs re-authentication.\n\n"
+        f"Error: {message}\n\n"
+        "To fix:\n"
+        "  1. On your local machine (not Docker): python src/auth.py\n"
+        "  2. Restart Docker: docker compose restart\n\n"
+        "Regards,\nBill Agent"
+    )
+    msg = MIMEText(body)
+    msg["Subject"] = "ACTION REQUIRED: Bill Agent — Google re-authentication needed"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(from_addr, app_password)
+            server.sendmail(from_addr, [to_addr], msg.as_string())
+        logger.info(f"Auth alert email sent to {to_addr}")
+    except Exception as e:
+        logger.error(f"Failed to send auth alert email: {e}")
 
 
 if __name__ == "__main__":
