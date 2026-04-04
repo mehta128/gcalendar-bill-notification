@@ -19,21 +19,30 @@ def authenticate():
     creds = None
 
     if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+        except Exception:
+            creds = None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if creds and creds.expired and creds.refresh_token:
+        try:
             creds.refresh(Request())
             print("Token refreshed.")
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
-            creds = flow.run_local_server(port=0)
-            print("Authentication successful!")
+        except Exception:
+            # invalid_grant means refresh token is no longer usable.
+            creds = None
+            if TOKEN_FILE.exists():
+                TOKEN_FILE.unlink()
+            print("Existing token is invalid/revoked. Starting fresh OAuth login.")
 
-        TOKEN_FILE.write_text(creds.to_json())
-        print(f"Token saved to {TOKEN_FILE}")
-    else:
-        print("Already authenticated, token is valid.")
+    if not creds or not creds.valid:
+        flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
+        creds = flow.run_local_server(port=0)
+        print("Authentication successful!")
+
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_FILE.write_text(creds.to_json())
+    print(f"Token saved to {TOKEN_FILE}")
 
 
 if __name__ == "__main__":
