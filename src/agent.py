@@ -80,8 +80,9 @@ def filter_items(items: list[dict], keywords: list[str]) -> list[dict]:
 SYSTEM_PROMPT = """You are a personal finance assistant. Your job is to:
 1. Call BOTH tools: get_todays_events and get_pending_tasks.
 2. From today's calendar events AND all pending tasks, identify anything that matches the user's keyword list.
-3. For tasks, flag any with is_overdue=true as overdue.
-4. Return ONLY a valid JSON object, no extra text:
+3. Both events and tasks carry is_overdue — flag any item with is_overdue=true as overdue.
+4. Use each item's own "date"/"due_date" field as due_date in the output — never substitute today's date.
+5. Return ONLY a valid JSON object, no extra text:
 {
   "checked_at": "<ISO datetime>",
   "due_today": [{"title": "...", "due_date": "...", "description": "..."}],
@@ -90,8 +91,8 @@ SYSTEM_PROMPT = """You are a personal finance assistant. Your job is to:
 }
 
 Rules:
-- due_today: matching calendar events today OR matching tasks with due_date = today
-- overdue: matching tasks where is_overdue=true
+- due_today: matching events/tasks with is_overdue=false (i.e. dated today)
+- overdue: matching events/tasks where is_overdue=true
 - If nothing found in a category, use []
 - Always call BOTH tools before responding."""
 
