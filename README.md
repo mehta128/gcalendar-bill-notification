@@ -13,7 +13,7 @@ Agent calls Google Calendar + Google Tasks via MCP tools
         ↓
 Filters results to keyword-matching items (bills, payroll, CIBC, Scotia, etc.)
         ↓
-Gemini (gemini-2.5-flash) categorizes into due_today and overdue
+Gemini (gemini-2.5-flash-lite) categorizes into due_today and overdue
         ↓
 Sends email summary → logs to bills.log
         ↓
@@ -28,7 +28,7 @@ Sleeps until same time tomorrow
 - Keyword filtering — only bill/payment-related items are processed
 - Detects **due today** and **overdue** items separately
 - Sends a **daily email** with a structured summary
-- Uses the **Gemini API** (Flash by default — fast and free-tier friendly for this workload)
+- Uses the **Gemini API** (Flash-Lite by default — Google's cheapest tier, plenty for this workload)
 - Fully **Dockerized** with persistent credentials and logs
 - Schedule and keywords configurable via a single `config.md` file — no code changes needed
 
@@ -157,7 +157,7 @@ No rebuild required — `config.md` is mounted as a live volume.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEMINI_API_KEY` | *(required)* | Gemini API key |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model to use |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Model to use |
 | `GOOGLE_CREDENTIALS_FILE` | `credentials/credentials.json` | OAuth credentials path |
 | `GOOGLE_TOKEN_FILE` | `credentials/token.json` | OAuth token path |
 | `LOG_FILE` | `logs/bills.log` | Log file path |
