@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -71,7 +71,10 @@ async def list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="get_todays_events",
-            description="Fetch all Google Calendar events scheduled for today across all calendars.",
+            description=(
+                "Fetch Google Calendar events dated today or earlier (up to 10 days back) "
+                "across all calendars, each flagged with is_overdue."
+            ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         types.Tool(
@@ -99,13 +102,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         except Exception as e:
             return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
         calendars = service.calendarList().list().execute().get("items", [])
+        # Look back 10 days so bills whose calendar day has already passed still surface as
+        # overdue, instead of silently disappearing once "today" moves past them.
+        window_start = today_start - timedelta(days=10)
         events = []
         for cal in calendars:
             result = (
                 service.events()
                 .list(
                     calendarId=cal["id"],
-                    timeMin=today_start.isoformat(),
+                    timeMin=window_start.isoformat(),
                     timeMax=today_end.isoformat(),
                     singleEvents=True,
                     orderBy="startTime",
@@ -115,17 +121,23 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             for e in result.get("items", []):
                 e["_calendar"] = cal.get("summary", cal["id"])
                 events.append(e)
-        # Return only relevant fields to keep payload small
-        slim = [
-            {
+
+        today_str = now.strftime("%Y-%m-%d")
+        slim = []
+        for e in events:
+            start = e.get("start", {})
+            # All-day events carry "date"; timed events carry "dateTime". Google's "end" for
+            # all-day events is exclusive (the day after), so the event's real day is "start".
+            event_date = start.get("date") or (start.get("dateTime") or "")[:10]
+            if not event_date or event_date > today_str:
+                continue
+            slim.append({
                 "title": e.get("summary", ""),
                 "description": e.get("description", ""),
-                "start": e.get("start", {}),
-                "end": e.get("end", {}),
+                "date": event_date,
+                "is_overdue": event_date < today_str,
                 "calendar": e.get("_calendar", ""),
-            }
-            for e in events
-        ]
+            })
         return [types.TextContent(type="text", text=json.dumps(slim, indent=2))]
 
     elif name == "get_pending_tasks":
