@@ -6,12 +6,14 @@ import os
 import re
 import smtplib
 import sys
+import time
 from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from loguru import logger
 from mcp import ClientSession, StdioServerParameters
@@ -96,6 +98,29 @@ Rules:
 - If nothing found in a category, use []
 - Always call BOTH tools before responding."""
 
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "4"))
+GEMINI_RETRY_BASE_DELAY = float(os.getenv("GEMINI_RETRY_BASE_DELAY", "5"))
+
+
+def _generate_content_with_retry(client: genai.Client, **kwargs):
+    """Call generate_content, retrying with backoff on transient errors
+    (server errors, rate limits) but failing fast on anything else."""
+    delay = GEMINI_RETRY_BASE_DELAY
+    for attempt in range(1, GEMINI_MAX_RETRIES + 1):
+        try:
+            return client.models.generate_content(**kwargs)
+        except genai_errors.APIError as e:
+            transient = e.code >= 500 or e.code == 429
+            if not transient or attempt == GEMINI_MAX_RETRIES:
+                raise
+            logger.warning(
+                f"Gemini call failed ({e.code} {e.status}), "
+                f"retrying in {delay:.0f}s (attempt {attempt}/{GEMINI_MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            delay *= 3
+    raise RuntimeError("unreachable: retry loop exited without returning or raising")
+
 
 async def run_agent():
     logger.info("Starting bill-check agent run")
@@ -154,7 +179,8 @@ async def run_agent():
             ]
 
             for _ in range(5):
-                response = client.models.generate_content(
+                response = _generate_content_with_retry(
+                    client,
                     model=GEMINI_MODEL,
                     contents=contents,
                     config=config,
