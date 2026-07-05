@@ -11,6 +11,7 @@ import zoneinfo
 
 from dotenv import load_dotenv
 from loguru import logger
+from datetime import timedelta
 
 load_dotenv()
 
@@ -59,7 +60,6 @@ def seconds_until(run_time: str, tz: zoneinfo.ZoneInfo) -> float:
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
         # Already passed today — schedule for tomorrow
-        from datetime import timedelta
         target += timedelta(days=1)
     return (target - now).total_seconds()
 
@@ -76,7 +76,6 @@ async def main():
             tz = zoneinfo.ZoneInfo("UTC")
 
         wait = seconds_until(run_time, tz)
-        from datetime import timedelta
         next_run_dt = datetime.now(tz) + timedelta(seconds=wait)
         next_run = next_run_dt.strftime(f"%Y-%m-%d %H:%M {timezone_str}")
         logger.info(f"Next run scheduled at {next_run} (in {wait/3600:.1f}h)")

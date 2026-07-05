@@ -1,6 +1,6 @@
 # Google Calendar Bill Agent
 
-An agentic Python system that checks your Google Calendar events and Google Tasks daily, detects due and overdue bills/payments, and sends you an email summary. Runs on a schedule inside Docker using a local Ollama LLM — no paid AI API required.
+An agentic Python system that checks your Google Calendar events and Google Tasks daily, detects due and overdue bills/payments, and sends you an email summary. Runs on a schedule inside Docker using the Gemini API.
 
 ---
 
@@ -13,7 +13,7 @@ Agent calls Google Calendar + Google Tasks via MCP tools
         ↓
 Filters results to keyword-matching items (bills, payroll, CIBC, Scotia, etc.)
         ↓
-LLM (Ollama / qwen2.5) categorizes into due_today and overdue
+Gemini (gemini-2.5-flash) categorizes into due_today and overdue
         ↓
 Sends email summary → logs to bills.log
         ↓
@@ -28,7 +28,7 @@ Sleeps until same time tomorrow
 - Keyword filtering — only bill/payment-related items are processed
 - Detects **due today** and **overdue** items separately
 - Sends a **daily email** with a structured summary
-- Runs entirely **free** — local Ollama LLM, no paid APIs
+- Uses the **Gemini API** (Flash by default — fast and free-tier friendly for this workload)
 - Fully **Dockerized** with persistent credentials and logs
 - Schedule and keywords configurable via a single `config.md` file — no code changes needed
 
@@ -59,7 +59,7 @@ gcalendar-bill-notification/
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- [Ollama](https://ollama.com) installed and running on your host machine
+- A [Gemini API key](https://aistudio.google.com/apikey) (free tier available)
 - A Google Cloud project with **Calendar API** and **Tasks API** enabled
 - A Gmail **App Password** for sending email notifications
 
@@ -67,10 +67,12 @@ gcalendar-bill-notification/
 
 ## Setup
 
-### 1. Pull the Ollama model
+### 1. Get a Gemini API key
 
-```bash
-ollama pull qwen2.5
+Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and add it to `.env`:
+
+```env
+GEMINI_API_KEY=...
 ```
 
 ### 2. Google Cloud credentials
@@ -154,8 +156,8 @@ No rebuild required — `config.md` is mounted as a live volume.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `qwen2.5` | Model to use |
+| `GEMINI_API_KEY` | *(required)* | Gemini API key |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model to use |
 | `GOOGLE_CREDENTIALS_FILE` | `credentials/credentials.json` | OAuth credentials path |
 | `GOOGLE_TOKEN_FILE` | `credentials/token.json` | OAuth token path |
 | `LOG_FILE` | `logs/bills.log` | Log file path |
@@ -204,3 +206,46 @@ docker compose restart
 ```
 
 To auto-start on system boot: **Docker Desktop → Settings → General → Start Docker Desktop when you log in**.
+
+---
+
+## Deploying for Free with GitHub Actions
+
+Since this agent only needs to run for a few seconds once a day, a scheduled GitHub Actions workflow (`.github/workflows/bill-agent.yml`) is a better fit than a 24/7 hosted container — no server to keep alive, and Actions is free for this workload on both public and private repos.
+
+This bypasses `scheduler.py`/Docker entirely — the workflow's cron trigger replaces the sleep loop, and it runs `src/agent.py` directly.
+
+### 1. Set repository secrets
+
+Go to **Settings → Secrets and variables → Actions** (or use `gh secret set`) and add:
+
+| Secret | Value |
+|--------|-------|
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `GMAIL_APP_PASSWORD` | Your Gmail app password |
+| `GOOGLE_CREDENTIALS_JSON` | Contents of `credentials/credentials.json` |
+| `GOOGLE_TOKEN_JSON` | Contents of `credentials/token.json` (generate first via `python src/auth.py` locally) |
+
+Using the CLI from the `gcalendar-bill-notification` directory:
+```bash
+gh secret set GEMINI_API_KEY --body "..."
+gh secret set GMAIL_APP_PASSWORD --body "your16charpassword"
+gh secret set GOOGLE_CREDENTIALS_JSON < credentials/credentials.json
+gh secret set GOOGLE_TOKEN_JSON < credentials/token.json
+```
+
+### 2. Adjust the schedule
+
+`config.md`'s `## Schedule` block is ignored in this mode. Edit the `cron:` line in `.github/workflows/bill-agent.yml` instead (cron is always UTC — GitHub doesn't support IANA timezones directly).
+
+### 3. Trigger manually to test
+
+```bash
+gh workflow run bill-agent.yml
+gh run watch
+```
+
+### Notes
+
+- **Refresh tokens**: the workflow doesn't write the refreshed `token.json` back to the secret — this is fine as long as your Google refresh token stays valid. If it's ever revoked (`invalid_grant`), you'll get the existing auth-alert email; re-run `python src/auth.py` locally and update the `GOOGLE_TOKEN_JSON` secret.
+- **Public repos**: secrets are encrypted and never printed in logs, so this is safe to use even on a public repo — but don't put personal info (email, keywords) in `config.md` if the repo is public, since that file is tracked in git and visible to anyone.

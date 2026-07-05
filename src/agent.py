@@ -1,4 +1,4 @@
-"""Bill-checking agent: uses Ollama + Google Calendar MCP to detect due/overdue bills."""
+"""Bill-checking agent: uses Gemini + Google Calendar MCP to detect due/overdue bills."""
 
 import asyncio
 import json
@@ -11,10 +11,11 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types as genai_types
 from loguru import logger
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from openai import OpenAI
 
 load_dotenv()
 
@@ -26,8 +27,8 @@ logger.add(sys.stderr, level="INFO", format="<green>{time:YYYY-MM-DD HH:mm:ss}</
 logger.add(str(LOG_FILE), level="INFO", rotation="1 week", retention="4 weeks",
            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 CONFIG_FILE = Path(__file__).parent.parent / "config.md"
 
@@ -118,50 +119,58 @@ async def run_agent():
             await session.initialize()
 
             mcp_tools = await session.list_tools()
-            tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.inputSchema,
-                    },
-                }
+            function_declarations = [
+                genai_types.FunctionDeclaration(
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.inputSchema,
+                )
                 for tool in mcp_tools.tools
             ]
-            logger.info(f"MCP tools available: {[t['function']['name'] for t in tools]}")
+            tools = [genai_types.Tool(function_declarations=function_declarations)]
+            logger.info(f"MCP tools available: {[t.name for t in mcp_tools.tools]}")
 
-            client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+            if not GEMINI_API_KEY:
+                logger.error("GEMINI_API_KEY not set — cannot run agent.")
+                return
+
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            config = genai_types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                tools=tools,
+            )
             keyword_list = ", ".join(keywords) if keywords else "bill, payment, payroll, credit card, rent"
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
+            contents: list[genai_types.Content] = [
+                genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text=(
                         f"Today is {today}. "
                         f"Keywords to match: {keyword_list}. "
                         "Call both tools, filter results to only items matching these keywords, "
                         "then return the JSON."
-                    ),
-                },
+                    ))],
+                ),
             ]
 
             for _ in range(5):
-                response = client.chat.completions.create(
-                    model=OLLAMA_MODEL,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=config,
                 )
 
-                msg = response.choices[0].message
-                finish_reason = response.choices[0].finish_reason
-                messages.append(msg)
+                candidate = response.candidates[0]
+                contents.append(candidate.content)
 
-                if finish_reason == "tool_calls" and msg.tool_calls:
-                    for tool_call in msg.tool_calls:
-                        name = tool_call.function.name
-                        args = json.loads(tool_call.function.arguments or "{}")
+                function_calls = [
+                    part.function_call for part in candidate.content.parts if part.function_call
+                ]
+
+                if function_calls:
+                    response_parts = []
+                    for fc in function_calls:
+                        name = fc.name
+                        args = dict(fc.args or {})
                         logger.info(f"Calling MCP tool: {name}")
                         result = await session.call_tool(name, args)
                         raw_content = result.content[0].text if result.content else "[]"
@@ -184,13 +193,19 @@ async def run_agent():
                             content = raw_content
                             print(f"\n--- {name} ---\n{content}\n---\n")
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": content,
-                        })
+                        response_parts.append(
+                            genai_types.Part.from_function_response(
+                                name=name,
+                                response={"result": content},
+                            )
+                        )
+
+                    contents.append(genai_types.Content(role="user", parts=response_parts))
                 else:
-                    _log_results(msg.content or "", today, email_config)
+                    final_text = "".join(
+                        part.text for part in candidate.content.parts if part.text
+                    )
+                    _log_results(final_text, today, email_config)
                     break
             else:
                 logger.warning("Reached max iterations without final answer")
