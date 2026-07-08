@@ -30,7 +30,7 @@ logger.add(str(LOG_FILE), level="INFO", rotation="1 week", retention="4 weeks",
            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 CONFIG_FILE = Path(__file__).parent.parent / "config.md"
 
