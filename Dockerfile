@@ -1,12 +1,12 @@
 FROM python:3.13-slim
 
 # Install Poetry
-RUN pip install poetry==1.8.5
+RUN pip install poetry==2.2.1
 
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY pyproject.toml poetry.lock ./
 
 # Install dependencies (no virtualenv inside Docker)
 RUN poetry config virtualenvs.create false \
