@@ -1,6 +1,6 @@
 # Google Calendar Bill Agent
 
-An agentic Python system that checks your Google Calendar events and Google Tasks daily, detects due and overdue bills/payments, and sends you an email summary. Runs on a schedule inside Docker using the Gemini API.
+An agentic Python system that checks your Google Calendar events and Google Tasks daily, detects due and overdue bills/payments, and sends you an email summary. Built on the **Model Context Protocol (MCP)** and the **Gemini API** with native function calling. Runs on a schedule inside Docker or as a GitHub Actions cron job.
 
 ---
 
@@ -9,11 +9,16 @@ An agentic Python system that checks your Google Calendar events and Google Task
 ```
 Scheduler wakes up at configured time (e.g. 08:50)
         ↓
-Agent calls Google Calendar + Google Tasks via MCP tools
+Agent (MCP client) spawns calendar_mcp.py (MCP server) over stdio
         ↓
-Filters results to keyword-matching items (bills, payroll, CIBC, Scotia, etc.)
+MCP tools are converted to Gemini function declarations
         ↓
-Gemini (gemini-2.5-flash-lite) categorizes into due_today and overdue
+Gemini (gemini-3.5-flash-lite) runs a tool-calling loop (max 5 turns):
+  get_todays_events + get_pending_tasks
+        ↓
+Tool results are filtered in code to keyword-matching items (bills, payroll, CIBC, Scotia, etc.)
+        ↓
+Gemini returns structured JSON: due_today, overdue, summary
         ↓
 Sends email summary → logs to bills.log
         ↓
@@ -22,14 +27,32 @@ Sleeps until same time tomorrow
 
 ---
 
+## AI Setup
+
+| Aspect | Current setup |
+|--------|---------------|
+| Model | `gemini-3.5-flash-lite` (override with `GEMINI_MODEL`) |
+| SDK | `google-genai` (unified Google GenAI SDK) |
+| Tool integration | MCP server (`mcp` Python SDK) over stdio, exposed to Gemini as function declarations |
+| Agent pattern | Single agent, tool-calling loop capped at 5 iterations |
+| Output | System prompt requires a strict JSON object; parsed and validated in code |
+| Reliability | Exponential backoff (x3) on HTTP 429 and 5xx errors; fails fast on other API errors |
+| Data minimisation | Keyword filter runs on tool results **before** they are sent to the model, so unrelated calendar data never leaves your machine |
+| Permissions | Read-only Google scopes (`calendar.readonly`, `tasks.readonly`) |
+| Failure handling | Expired/revoked OAuth token triggers an auth-alert email instead of a silent failure |
+
+---
+
 ## Features
 
 - Checks **Google Calendar events** and **Google Tasks** in one run
-- Keyword filtering — only bill/payment-related items are processed
+- **MCP-based tooling** — the Google integration is a standalone MCP server, reusable by any MCP client
+- Keyword filtering — only bill/payment-related items are processed and sent to the LLM
 - Detects **due today** and **overdue** items separately
 - Sends a **daily email** with a structured summary
-- Uses the **Gemini API** (Flash-Lite by default — Google's cheapest tier, plenty for this workload)
-- Fully **Dockerized** with persistent credentials and logs
+- Uses the **Gemini API** (Flash-Lite tier — low cost, plenty for this workload)
+- **Retry with backoff** on rate limits and transient server errors
+- Two deployment options: **Docker** (24/7 scheduler) or **GitHub Actions** (cron, no server)
 - Schedule and keywords configurable via a single `config.md` file — no code changes needed
 
 ---
@@ -39,10 +62,12 @@ Sleeps until same time tomorrow
 ```
 gcalendar-bill-notification/
 ├── src/
-│   ├── agent.py          # Main agent — agentic loop, LLM, email sending
+│   ├── agent.py          # MCP client + Gemini tool-calling loop, retries, email sending
 │   ├── scheduler.py      # Long-running scheduler — reads config, triggers agent daily
 │   ├── calendar_mcp.py   # MCP server — exposes Google Calendar + Tasks as tools
 │   └── auth.py           # One-time OAuth authentication script
+├── .github/workflows/
+│   └── bill-agent.yml    # Scheduled GitHub Actions alternative to Docker
 ├── credentials/
 │   ├── credentials.json  # Google OAuth client credentials (you provide)
 │   └── token.json        # Auto-generated after first auth run
@@ -58,7 +83,8 @@ gcalendar-bill-notification/
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- Python 3.13+ and [Poetry](https://python-poetry.org/) (for local runs and auth)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for the Docker deployment)
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier available)
 - A Google Cloud project with **Calendar API** and **Tasks API** enabled
 - A Gmail **App Password** for sending email notifications
@@ -157,7 +183,9 @@ No rebuild required — `config.md` is mounted as a live volume.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEMINI_API_KEY` | *(required)* | Gemini API key |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Model to use |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model to use |
+| `GEMINI_MAX_RETRIES` | `4` | Max attempts for 429/5xx Gemini errors |
+| `GEMINI_RETRY_BASE_DELAY` | `5` | Initial retry delay in seconds (tripled each retry) |
 | `GOOGLE_CREDENTIALS_FILE` | `credentials/credentials.json` | OAuth credentials path |
 | `GOOGLE_TOKEN_FILE` | `credentials/token.json` | OAuth token path |
 | `LOG_FILE` | `logs/bills.log` | Log file path |
